@@ -95,6 +95,7 @@ public fun premain(opt: String?, inst: Instrumentation) {
                 loader.loadClass("net.weavemc.loader.WeaveLoader")
                     .getDeclaredMethod("init", Instrumentation::class.java)
                     .invoke(null, inst)
+                println("[Weave] Initialized")
             }
 
             return null
