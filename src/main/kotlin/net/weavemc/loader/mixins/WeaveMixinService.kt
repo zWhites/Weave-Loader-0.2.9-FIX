@@ -244,4 +244,9 @@ public class WeaveMixinService : IMixinService, IClassProvider, IClassBytecodePr
      */
     override fun getClassNode(name: String, runTransformers: Boolean): ClassNode =
         getClassNode(name)
+
+    // match sig fun getClassNode(String, Boolean, Int) to fix for latest lc
+    @Suppress("unused")
+    public fun getClassNode(name: String, runTransformers: Boolean, ignored: Int): ClassNode =
+        getClassNode(name)
 }
