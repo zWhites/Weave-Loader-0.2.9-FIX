@@ -39,6 +39,7 @@ public object WeaveLoader {
     @OptIn(ExperimentalSerializationApi::class)
     public fun init(inst: Instrumentation) {
         println("[Weave] Initializing Weave")
+        println("[Weave] 0.2.7 legacy-weave fixed for modern lunar - hi from @jiminnn")
 
         MixinBootstrap.init()
         check(MixinService.getService() is WeaveMixinService) { "Active mixin service is NOT WeaveMixinService" }
