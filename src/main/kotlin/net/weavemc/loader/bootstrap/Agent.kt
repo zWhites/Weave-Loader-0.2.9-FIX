@@ -11,18 +11,10 @@ import java.lang.instrument.ClassFileTransformer
 import java.lang.instrument.Instrumentation
 import java.security.ProtectionDomain
 
-/**
- * The JavaAgent's `premain()` method, this is where initialization of Weave Loader begins.
- * Weave Loader's initialization begins by calling [WeaveLoader.init()][WeaveLoader.init], which is loaded through Genesis.
- */
 @Suppress("UNUSED_PARAMETER")
 public fun premain(opt: String?, inst: Instrumentation) {
     val version = findVersion()
 
-    // FIX 1: Lunar Client sometimes omits --version entirely, or wraps the launch in a way
-    // that the regex captures nothing (version == null). Also accept any 1.8.x variant
-    // (e.g. "1.8.9-lunarclient", "1.8.9-optifine") instead of only exact strings.
-    // Only hard-block if we positively detect a non-1.8 version string.
     val is18 = version == null || version == "1.8" || version.startsWith("1.8.")
     if (!is18) {
         println("[Weave] $version not supported, disabling...")
@@ -30,14 +22,11 @@ public fun premain(opt: String?, inst: Instrumentation) {
     }
 
     if (version == null) {
-        println("[Weave] Could not detect MC version from sun.java.command — assuming 1.8.9 (Lunar Client mode)")
+        println("[Weave] Could not detect MC version — assuming 1.8.9 (Lunar Client mode)")
     } else {
         println("[Weave] Detected version: $version")
     }
 
-    // FIX 2: Wrap retransformClasses in a try/catch so that if sun.management.RuntimeImpl
-    // is unavailable or already loaded differently (common on some Lunar Client builds),
-    // the whole agent does not silently abort — it just skips the JVM-args-hiding patch.
     inst.addTransformer(object : ClassFileTransformer {
         override fun transform(
             loader: ClassLoader?,
@@ -99,29 +88,35 @@ public fun premain(opt: String?, inst: Instrumentation) {
     try {
         inst.retransformClasses(Class.forName("sun.management.RuntimeImpl", false, ClassLoader.getSystemClassLoader()))
     } catch (e: Exception) {
-        // FIX 2: Don't crash if RuntimeImpl isn't retransformable on this JVM/Lunar build.
-        // The javaagent-args-hiding patch is cosmetic; Weave can still load mods without it.
-        println("[Weave] Warning: could not patch RuntimeImpl.getInputArguments (${e.javaClass.simpleName}: ${e.message})")
+        println("[Weave] Warning: could not patch RuntimeImpl (${e.javaClass.simpleName}: ${e.message})")
     }
 
     inst.addTransformer(URLClassLoaderTransformer)
 
-    // FIX 3+4: Initialize Weave exactly when net/minecraft/client/Minecraft is being loaded.
+    // FIX DEFINITIVO: Inicializar Weave cuando se carga "net/minecraft/client/ClientBrandRetriever"
+    // o "net/minecraft/client/main/Main" — ambas se cargan ANTES de que Minecraft.class sea
+    // instanciada, dando tiempo al HookManager de registrarse y transformar Minecraft.class
+    // correctamente. Esto garantiza que StartGameEventHook, GuiOpenEventHook, TickEventHook, etc.
+    // se aplican al bytecode antes de que cualquier método de Minecraft se ejecute.
     //
-    // BUG RAIZ del menú de cosméticos: el trigger original usaba startsWith("net/minecraft/client/"),
-    // que podía dispararse con cualquier clase del paquete (ej. GuiScreen, FontRenderer, etc.)
-    // ANTES de que Minecraft.class fuera cargada. Weave se inicializaba, registraba los hooks,
-    // pero Minecraft.class ya estaba cargada — así que GuiOpenEventHook y StartGameEventHook
-    // (ambos targeting "net/minecraft/client/Minecraft") NUNCA se aplicaban al bytecode.
-    // Resultado: displayGuiScreen no estaba instrumentado → el menú de cosméticos no abría
-    // desde el menú principal (donde Lunar lo invoca vía GuiOpenEvent).
-    //
-    // Al esperar exactamente a "net/minecraft/client/Minecraft", garantizamos que los hooks
-    // se registran antes de que esa clase termine de cargarse, y el HookManager la transforma.
+    // Fallback: si ninguna de esas aparece primero, también reaccionamos a cualquier clase
+    // net/minecraft/ que NO sea la propia Minecraft (para evitar el problema de before vs during load).
+    var initialized = false
+
     inst.addTransformer(object : SafeTransformer {
         override fun transform(loader: ClassLoader, className: String, originalClass: ByteArray): ByteArray? {
-            if (className != "net/minecraft/client/Minecraft") return null
+            if (initialized) return null
 
+            // Trigger en clases que aparecen justo ANTES de Minecraft.class en Lunar
+            val shouldInit = className == "net/minecraft/client/ClientBrandRetriever" ||
+                             className == "net/minecraft/client/main/Main" ||
+                             // Fallback: cualquier clase net/minecraft/ excepto la propia Minecraft
+                             (className.startsWith("net/minecraft/") &&
+                              className != "net/minecraft/client/Minecraft")
+
+            if (!shouldInit) return null
+
+            initialized = true
             inst.removeTransformer(URLClassLoaderTransformer)
             inst.removeTransformer(this)
 
@@ -130,26 +125,17 @@ public fun premain(opt: String?, inst: Instrumentation) {
                 loader.loadClass("net.weavemc.loader.WeaveLoader")
                     .getDeclaredMethod("init", Instrumentation::class.java)
                     .invoke(null, inst)
-                println("[Weave] Initialized")
+                println("[Weave] Initialized (triggered by: $className)")
             } catch (e: Exception) {
                 System.err.println("[Weave] ERROR: Failed to initialize WeaveLoader!")
                 e.printStackTrace()
-                // Do NOT rethrow — let Minecraft continue to boot without Weave.
             }
 
-            // Retornar null aquí: el HookManager (registrado dentro de init()) ya
-            // está activo y transformará esta misma clase correctamente.
             return null
         }
     })
 }
 
-/**
- * Reads the Minecraft version from the JVM's `sun.java.command` system property.
- *
- * Lunar Client passes `--version <ver>` in the command string.
- * Returns null if the flag is absent (handled gracefully in [premain]).
- */
 private fun findVersion(): String? =
     System.getProperty("sun.java.command")
         ?.let { """--version\s+(\S+)""".toRegex().find(it)?.groupValues?.get(1) }
