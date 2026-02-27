@@ -15,6 +15,10 @@ import java.security.ProtectionDomain
 public fun premain(opt: String?, inst: Instrumentation) {
     val version = findVersion()
 
+    // FIX 1: Lunar Client sometimes omits --version entirely, or wraps the launch in a way
+    // that the regex captures nothing (version == null). Also accept any 1.8.x variant
+    // (e.g. "1.8.9-lunarclient", "1.8.9-optifine") instead of only exact strings.
+    // Only hard-block if we positively detect a non-1.8 version string.
     val is18 = version == null || version == "1.8" || version.startsWith("1.8.")
     if (!is18) {
         println("[Weave] $version not supported, disabling...")
@@ -27,6 +31,9 @@ public fun premain(opt: String?, inst: Instrumentation) {
         println("[Weave] Detected version: $version")
     }
 
+    // FIX 2: Wrap retransformClasses in a try/catch so that if sun.management.RuntimeImpl
+    // is unavailable or already loaded differently (common on some Lunar Client builds),
+    // the whole agent does not silently abort — it just skips the JVM-args-hiding patch.
     inst.addTransformer(object : ClassFileTransformer {
         override fun transform(
             loader: ClassLoader?,
@@ -93,30 +100,11 @@ public fun premain(opt: String?, inst: Instrumentation) {
 
     inst.addTransformer(URLClassLoaderTransformer)
 
-    // FIX DEFINITIVO: Inicializar Weave cuando se carga "net/minecraft/client/ClientBrandRetriever"
-    // o "net/minecraft/client/main/Main" — ambas se cargan ANTES de que Minecraft.class sea
-    // instanciada, dando tiempo al HookManager de registrarse y transformar Minecraft.class
-    // correctamente. Esto garantiza que StartGameEventHook, GuiOpenEventHook, TickEventHook, etc.
-    // se aplican al bytecode antes de que cualquier método de Minecraft se ejecute.
-    //
-    // Fallback: si ninguna de esas aparece primero, también reaccionamos a cualquier clase
-    // net/minecraft/ que NO sea la propia Minecraft (para evitar el problema de before vs during load).
-    var initialized = false
-
+    // Trigger original — igual al 0.2.9 que funciona correctamente con los mods
     inst.addTransformer(object : SafeTransformer {
         override fun transform(loader: ClassLoader, className: String, originalClass: ByteArray): ByteArray? {
-            if (initialized) return null
+            if (!className.startsWith("net/minecraft/client/")) return null
 
-            // Trigger en clases que aparecen justo ANTES de Minecraft.class en Lunar
-            val shouldInit = className == "net/minecraft/client/ClientBrandRetriever" ||
-                             className == "net/minecraft/client/main/Main" ||
-                             // Fallback: cualquier clase net/minecraft/ excepto la propia Minecraft
-                             (className.startsWith("net/minecraft/") &&
-                              className != "net/minecraft/client/Minecraft")
-
-            if (!shouldInit) return null
-
-            initialized = true
             inst.removeTransformer(URLClassLoaderTransformer)
             inst.removeTransformer(this)
 
