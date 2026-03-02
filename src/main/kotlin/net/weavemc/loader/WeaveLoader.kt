@@ -37,18 +37,23 @@ public object WeaveLoader {
      */
     @JvmStatic
     @OptIn(ExperimentalSerializationApi::class)
-    public fun init(inst: Instrumentation) {
+    public fun init(inst: Instrumentation, mcClassLoader: ClassLoader) {
         println("[Weave] Initializing Weave")
-        println("[Weave] 0.2.7 legacy-weave fixed for modern lunar - hi from @jiminnn")
+        println("[Weave] 0.2.7 legacy weave fix modern lunar- hi from @jiminnn - HOTFIX by @taquins hi")
 
         MixinBootstrap.init()
-        check(MixinService.getService() is WeaveMixinService) { "Active mixin service is NOT WeaveMixinService" }
-        ensureDefaultMixinPhase()
+        val mixinService = MixinService.getService()
+        if (mixinService !is WeaveMixinService) {
+            println("[Weave] Warning: Active mixin service is ${mixinService.javaClass.name}, not WeaveMixinService — mixins may not work")
+        } else {
+            ensureDefaultMixinPhase()
+            inst.addTransformer(WeaveMixinTransformer)
+        }
 
-        inst.addTransformer(WeaveMixinTransformer)
         inst.addTransformer(HookManager)
 
-        val loader = javaClass.classLoader as URLClassLoaderAccessor
+        val isWeaveMixin = mixinService is WeaveMixinService
+        val loader = mcClassLoader as URLClassLoaderAccessor
         val json = Json { ignoreUnknownKeys = true }
         getOrCreateModDirectory()
             .listDirectoryEntries("*.jar")
@@ -62,7 +67,17 @@ public object WeaveLoader {
                 val config = json.decodeFromStream<ModConfig>(jar.getInputStream(configEntry))
                 val name = config.name ?: jar.name.removeSuffix(".jar")
 
-                config.mixinConfigs.forEach(Mixins::addConfiguration)
+                if (isWeaveMixin) {
+                    config.mixinConfigs.forEach { mixinConfig ->
+                        try {
+                            Mixins.addConfiguration(mixinConfig)
+                        } catch (e: Exception) {
+                            println("[Weave] Warning: could not add mixin config $mixinConfig: ${e.message}")
+                        }
+                    }
+                } else {
+                    println("[Weave] Skipping mixin configs for ${jar.name} (WeaveMixinService not active)")
+                }
                 HookManager.hooks += config.hooks.map(::instantiate)
 
                 // TODO: Add a name field to the config.
@@ -125,5 +140,3 @@ public object WeaveLoader {
             .newInstance() as? T
             ?: error("$className does not implement ${T::class.java.simpleName}!")
 }
-
-

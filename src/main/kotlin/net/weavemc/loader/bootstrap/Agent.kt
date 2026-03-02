@@ -110,9 +110,27 @@ public fun premain(opt: String?, inst: Instrumentation) {
 
             try {
                 (loader as URLClassLoaderAccessor).addWeaveURL(javaClass.protectionDomain.codeSource.location)
+
+                // Forzar WeaveMixinService como servicio activo antes de que WeaveLoader llame MixinBootstrap.init()
+                try {
+                    val mixinServiceClass = loader.loadClass("org.spongepowered.asm.service.MixinService")
+                    val instanceField = mixinServiceClass.getDeclaredField("instance").also { it.isAccessible = true }
+                    val mixinServiceInstance = instanceField.get(null)
+                    if (mixinServiceInstance != null) {
+                        val serviceField = mixinServiceClass.getDeclaredField("service").also { it.isAccessible = true }
+                        val weaveMixinServiceClass = loader.loadClass("net.weavemc.loader.mixins.WeaveMixinService")
+                        // Kotlin object singleton - instanciar directamente
+                        val weaveMixinService = weaveMixinServiceClass.getDeclaredConstructor().also { it.isAccessible = true }.newInstance()
+                        serviceField.set(mixinServiceInstance, weaveMixinService)
+                        println("[Weave] Forced WeaveMixinService as active mixin service")
+                    }
+                } catch (e: Exception) {
+                    println("[Weave] Could not force WeaveMixinService: ${e.message}")
+                }
+
                 loader.loadClass("net.weavemc.loader.WeaveLoader")
-                    .getDeclaredMethod("init", Instrumentation::class.java)
-                    .invoke(null, inst)
+                    .getDeclaredMethod("init", Instrumentation::class.java, ClassLoader::class.java)
+                    .invoke(null, inst, loader)
                 println("[Weave] Initialized (triggered by: $className)")
             } catch (e: Exception) {
                 System.err.println("[Weave] ERROR: Failed to initialize WeaveLoader!")

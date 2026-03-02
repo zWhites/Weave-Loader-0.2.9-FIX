@@ -37,6 +37,8 @@ public class WeaveMixinService : IMixinService, IClassProvider, IClassBytecodePr
 
         lateinit var transformer: IMixinTransformer
             private set
+
+        fun isTransformerInitialized(): Boolean = ::transformer.isInitialized
     }
 
     private val remapper = KinRemapper("/lunar/lunar_named_b5_1.8.9.kin")
