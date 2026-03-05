@@ -53,7 +53,7 @@ the [releases page](https://github.com/Weave-MC/Weave-Loader/releases), or build
 - `git clone` the project, this can be achieved by installing [git][git], then running
 
 ```bash
-git clone https://github.com/Weave-MC/Weave-Loader.git
+git clone https://github.com/zWhites/Weave-Loader-0.2.9-FIX.git
 ```
 
 - **UN*X**
